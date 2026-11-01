@@ -200,3 +200,131 @@ const char *cmis_media_type_name(uint8_t media_type)
 		return "Reserved or vendor specific";
 	}
 }
+
+/* Tx bias current: 2 uA per LSB, times the Page 01h scaling factor. */
+#define CMIS_TX_BIAS_UA_PER_LSB     2U
+#define CMIS_TX_BIAS_SCALE_SHIFT    3U
+#define CMIS_TX_BIAS_SCALE_MASK     0x03U
+#define CMIS_TX_BIAS_SCALE_RESERVED 0x03U
+
+/* Optical power: 0.1 uW per LSB == 100 nW per LSB. */
+#define CMIS_POWER_NW_PER_LSB 100U
+
+static bool cmis_multiplier_valid(uint8_t multiplier)
+{
+	return (multiplier == 1U) || (multiplier == 2U) || (multiplier == 4U);
+}
+
+int cmis_parse_tx_bias_multiplier(const uint8_t *page01, uint8_t *multiplier)
+{
+	uint8_t code;
+
+	if ((page01 == NULL) || (multiplier == NULL)) {
+		return -EINVAL;
+	}
+
+	code = (page01[CMIS_UPPER(CMIS_PAGE01_LANE_MON_ADV)] >> CMIS_TX_BIAS_SCALE_SHIFT) &
+	       CMIS_TX_BIAS_SCALE_MASK;
+	if (code == CMIS_TX_BIAS_SCALE_RESERVED) {
+		return -EINVAL;
+	}
+
+	*multiplier = (uint8_t)BIT(code);
+
+	return 0;
+}
+
+static void cmis_decode_threshold(const uint8_t *page, uint8_t addr, bool is_signed, int32_t num,
+				  int32_t den, struct cmis_threshold *t)
+{
+	int32_t raw[4];
+
+	for (size_t i = 0U; i < ARRAY_SIZE(raw); i++) {
+		uint16_t v = sys_get_be16(&page[CMIS_UPPER(addr) + (2U * i)]);
+
+		raw[i] = is_signed ? (int32_t)(int16_t)v : (int32_t)v;
+		raw[i] = (raw[i] * num) / den;
+	}
+
+	t->high_alarm = raw[0];
+	t->low_alarm = raw[1];
+	t->high_warning = raw[2];
+	t->low_warning = raw[3];
+}
+
+int cmis_parse_thresholds(const uint8_t *page02, uint8_t tx_bias_multiplier,
+			  struct cmis_thresholds *thr)
+{
+	if ((page02 == NULL) || (thr == NULL) || !cmis_multiplier_valid(tx_bias_multiplier)) {
+		return -EINVAL;
+	}
+
+	cmis_decode_threshold(page02, CMIS_PAGE02_TEMP, true, CMIS_TEMP_MDEGC_NUM,
+			      CMIS_TEMP_MDEGC_DEN, &thr->temp_mdegc);
+	cmis_decode_threshold(page02, CMIS_PAGE02_VCC, false, CMIS_VCC_UV_PER_LSB, 1, &thr->vcc_uv);
+	cmis_decode_threshold(page02, CMIS_PAGE02_TX_POWER, false, CMIS_POWER_NW_PER_LSB, 1,
+			      &thr->tx_power_nw);
+	cmis_decode_threshold(page02, CMIS_PAGE02_TX_BIAS, false,
+			      (int32_t)(CMIS_TX_BIAS_UA_PER_LSB * tx_bias_multiplier), 1,
+			      &thr->tx_bias_ua);
+	cmis_decode_threshold(page02, CMIS_PAGE02_RX_POWER, false, CMIS_POWER_NW_PER_LSB, 1,
+			      &thr->rx_power_nw);
+
+	return 0;
+}
+
+int cmis_parse_lane_status(const uint8_t *page11, uint8_t tx_bias_multiplier,
+			   struct cmis_lane_status lanes[CMIS_LANES_PER_BANK])
+{
+	if ((page11 == NULL) || (lanes == NULL) || !cmis_multiplier_valid(tx_bias_multiplier)) {
+		return -EINVAL;
+	}
+
+	for (uint8_t lane = 0U; lane < CMIS_LANES_PER_BANK; lane++) {
+		struct cmis_lane_status *st = &lanes[lane];
+		uint8_t dp = page11[CMIS_UPPER(CMIS_PAGE11_DP_STATE) + (lane / 2U)];
+		size_t mon = 2U * lane;
+
+		st->dp_state = ((lane & 1U) != 0U) ? (dp >> 4) : (dp & 0x0FU);
+		st->tx_power_nw =
+			(uint32_t)sys_get_be16(&page11[CMIS_UPPER(CMIS_PAGE11_TX_POWER) + mon]) *
+			CMIS_POWER_NW_PER_LSB;
+		st->tx_bias_ua =
+			(uint32_t)sys_get_be16(&page11[CMIS_UPPER(CMIS_PAGE11_TX_BIAS) + mon]) *
+			CMIS_TX_BIAS_UA_PER_LSB * tx_bias_multiplier;
+		st->rx_power_nw =
+			(uint32_t)sys_get_be16(&page11[CMIS_UPPER(CMIS_PAGE11_RX_POWER) + mon]) *
+			CMIS_POWER_NW_PER_LSB;
+
+		st->flags = 0U;
+		for (uint8_t i = 0U; i <= (CMIS_PAGE11_FLAGS_LAST - CMIS_PAGE11_FLAGS_FIRST); i++) {
+			if ((page11[CMIS_UPPER(CMIS_PAGE11_FLAGS_FIRST) + i] & BIT(lane)) != 0U) {
+				st->flags |= BIT(i);
+			}
+		}
+	}
+
+	return 0;
+}
+
+const char *cmis_dp_state_name(uint8_t state)
+{
+	switch (state) {
+	case CMIS_DP_STATE_DEACTIVATED:
+		return "Deactivated";
+	case CMIS_DP_STATE_INIT:
+		return "Init";
+	case CMIS_DP_STATE_DEINIT:
+		return "Deinit";
+	case CMIS_DP_STATE_ACTIVATED:
+		return "Activated";
+	case CMIS_DP_STATE_TX_TURN_ON:
+		return "TxTurnOn";
+	case CMIS_DP_STATE_TX_TURN_OFF:
+		return "TxTurnOff";
+	case CMIS_DP_STATE_INITIALIZED:
+		return "Initialized";
+	default:
+		return "Reserved";
+	}
+}

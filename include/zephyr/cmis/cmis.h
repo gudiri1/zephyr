@@ -141,6 +141,87 @@ extern "C" {
 #define CMIS_MEDIA_BASE_T         0x05U /**< BASE-T. */
 /** @} */
 
+/** Number of lanes described by one bank of Pages 10h-1Fh. */
+#define CMIS_LANES_PER_BANK 8U
+
+/** Convert an absolute upper-memory byte address (128..255) to a page offset. */
+#define CMIS_UPPER(addr) ((addr) - CMIS_PAGE_SIZE)
+
+/**
+ * @name Upper Page 01h byte offsets (advertising)
+ * @{
+ */
+/** Lane monitor advertisement; Tx bias current scaling factor in bits 4..3. */
+#define CMIS_PAGE01_LANE_MON_ADV 160U
+/** @} */
+
+/**
+ * @name Upper Page 02h byte offsets (monitor thresholds)
+ *
+ * Each threshold set holds four big-endian 16-bit values in this order: high
+ * alarm, low alarm, high warning, low warning.
+ * @{
+ */
+#define CMIS_PAGE02_TEMP     128U /**< Module temperature, 1/256 deg C. */
+#define CMIS_PAGE02_VCC      136U /**< Supply voltage, 100 uV/LSB. */
+#define CMIS_PAGE02_TX_POWER 176U /**< Tx optical power, 0.1 uW/LSB. */
+#define CMIS_PAGE02_TX_BIAS  184U /**< Tx bias current, 2 uA/LSB times the scaling factor. */
+#define CMIS_PAGE02_RX_POWER 192U /**< Rx optical power, 0.1 uW/LSB. */
+/** @} */
+
+/**
+ * @name Upper Page 11h byte offsets (lane status, bank 0)
+ * @{
+ */
+#define CMIS_PAGE11_DP_STATE    128U /**< Data path state, 4 bits per host lane, lane 1 low. */
+#define CMIS_PAGE11_FLAGS_FIRST 134U /**< First latched lane flag byte (DP state changed). */
+#define CMIS_PAGE11_FLAGS_LAST  152U /**< Last latched lane flag byte (Rx power low warning). */
+#define CMIS_PAGE11_TX_POWER    154U /**< Tx power monitors, 8 x 16 bit, 0.1 uW/LSB. */
+#define CMIS_PAGE11_TX_BIAS     170U /**< Tx bias monitors, 8 x 16 bit, 2 uA/LSB x scaling. */
+#define CMIS_PAGE11_RX_POWER    186U /**< Rx power monitors, 8 x 16 bit, 0.1 uW/LSB. */
+/** @} */
+
+/**
+ * @name Data path states (Page 11h, 4 bits per host lane)
+ * @{
+ */
+#define CMIS_DP_STATE_DEACTIVATED 0x1U /**< DPDeactivated. */
+#define CMIS_DP_STATE_INIT        0x2U /**< DPInit. */
+#define CMIS_DP_STATE_DEINIT      0x3U /**< DPDeinit. */
+#define CMIS_DP_STATE_ACTIVATED   0x4U /**< DPActivated. */
+#define CMIS_DP_STATE_TX_TURN_ON  0x5U /**< DPTxTurnOn. */
+#define CMIS_DP_STATE_TX_TURN_OFF 0x6U /**< DPTxTurnOff. */
+#define CMIS_DP_STATE_INITIALIZED 0x7U /**< DPInitialized. */
+/** @} */
+
+/**
+ * @name Lane flags
+ *
+ * Bit n of @ref cmis_lane_status.flags is the lane's bit in Page 11h byte
+ * 134 + n. The module latches these flags and clears them when they are read.
+ * @{
+ */
+#define CMIS_LANE_FLAG_DP_STATE_CHANGED      BIT(0)  /**< Data path state changed. */
+#define CMIS_LANE_FLAG_TX_FAULT              BIT(1)  /**< Tx fault. */
+#define CMIS_LANE_FLAG_TX_LOS                BIT(2)  /**< Tx (host side) loss of signal. */
+#define CMIS_LANE_FLAG_TX_CDR_LOL            BIT(3)  /**< Tx CDR loss of lock. */
+#define CMIS_LANE_FLAG_TX_ADAPT_EQ_FAULT     BIT(4)  /**< Tx adaptive equalization fault. */
+#define CMIS_LANE_FLAG_TX_POWER_HIGH_ALARM   BIT(5)  /**< Tx power high alarm. */
+#define CMIS_LANE_FLAG_TX_POWER_LOW_ALARM    BIT(6)  /**< Tx power low alarm. */
+#define CMIS_LANE_FLAG_TX_POWER_HIGH_WARNING BIT(7)  /**< Tx power high warning. */
+#define CMIS_LANE_FLAG_TX_POWER_LOW_WARNING  BIT(8)  /**< Tx power low warning. */
+#define CMIS_LANE_FLAG_TX_BIAS_HIGH_ALARM    BIT(9)  /**< Tx bias high alarm. */
+#define CMIS_LANE_FLAG_TX_BIAS_LOW_ALARM     BIT(10) /**< Tx bias low alarm. */
+#define CMIS_LANE_FLAG_TX_BIAS_HIGH_WARNING  BIT(11) /**< Tx bias high warning. */
+#define CMIS_LANE_FLAG_TX_BIAS_LOW_WARNING   BIT(12) /**< Tx bias low warning. */
+#define CMIS_LANE_FLAG_RX_LOS                BIT(13) /**< Rx loss of signal. */
+#define CMIS_LANE_FLAG_RX_CDR_LOL            BIT(14) /**< Rx CDR loss of lock. */
+#define CMIS_LANE_FLAG_RX_POWER_HIGH_ALARM   BIT(15) /**< Rx power high alarm. */
+#define CMIS_LANE_FLAG_RX_POWER_LOW_ALARM    BIT(16) /**< Rx power low alarm. */
+#define CMIS_LANE_FLAG_RX_POWER_HIGH_WARNING BIT(17) /**< Rx power high warning. */
+#define CMIS_LANE_FLAG_RX_POWER_LOW_WARNING  BIT(18) /**< Rx power low warning. */
+/** @} */
+
 /** Decoded CMIS Page 00h identification contents. */
 struct cmis_id {
 	/** Module identifier, raw SFF-8024 value (@c CMIS_ID_*). */
@@ -189,6 +270,37 @@ struct cmis_monitors {
 	uint8_t flags;
 };
 
+/** One set of monitor thresholds, in the unit of the monitor it applies to. */
+struct cmis_threshold {
+	int32_t high_alarm;   /**< High alarm threshold. */
+	int32_t low_alarm;    /**< Low alarm threshold. */
+	int32_t high_warning; /**< High warning threshold. */
+	int32_t low_warning;  /**< Low warning threshold. */
+};
+
+/** Decoded CMIS Page 02h monitor thresholds. */
+struct cmis_thresholds {
+	struct cmis_threshold temp_mdegc;  /**< Module temperature, millidegrees Celsius. */
+	struct cmis_threshold vcc_uv;      /**< Supply voltage, microvolts. */
+	struct cmis_threshold tx_power_nw; /**< Tx optical power, nanowatts. */
+	struct cmis_threshold tx_bias_ua;  /**< Tx bias current, microamperes. */
+	struct cmis_threshold rx_power_nw; /**< Rx optical power, nanowatts. */
+};
+
+/** Decoded CMIS Page 11h status of one lane. */
+struct cmis_lane_status {
+	/** Data path state of the host lane (@c CMIS_DP_STATE_*). */
+	uint8_t dp_state;
+	/** Tx optical power of the media lane, nanowatts. */
+	uint32_t tx_power_nw;
+	/** Tx bias current of the media lane, microamperes. */
+	uint32_t tx_bias_ua;
+	/** Rx optical power of the media lane, nanowatts. */
+	uint32_t rx_power_nw;
+	/** Latched lane flags as a bitmask of @c CMIS_LANE_FLAG_* values. */
+	uint32_t flags;
+};
+
 /**
  * @brief Decode the CMIS Page 00h identification contents.
  *
@@ -213,6 +325,55 @@ int cmis_parse_id(const uint8_t *page00, struct cmis_id *id);
  * @retval -EINVAL @p lower or @p mon is NULL.
  */
 int cmis_parse_monitors(const uint8_t *lower, struct cmis_monitors *mon);
+
+/**
+ * @brief Decode the Tx bias current scaling factor (Page 01h byte 160).
+ *
+ * @param page01 Buffer holding Upper Page 01h (128 bytes, byte 128 first).
+ * @param multiplier Destination for the factor: 1, 2 or 4.
+ *
+ * @retval 0 Success.
+ * @retval -EINVAL @p page01 or @p multiplier is NULL, or the field holds the
+ *                 reserved code.
+ */
+int cmis_parse_tx_bias_multiplier(const uint8_t *page01, uint8_t *multiplier);
+
+/**
+ * @brief Decode the monitor thresholds of Upper Page 02h.
+ *
+ * @param page02 Buffer holding Upper Page 02h (128 bytes, byte 128 first).
+ * @param tx_bias_multiplier Factor from @ref cmis_parse_tx_bias_multiplier.
+ * @param thr Destination for the decoded thresholds.
+ *
+ * @retval 0 Success.
+ * @retval -EINVAL @p page02 or @p thr is NULL, or @p tx_bias_multiplier is not
+ *                 1, 2 or 4.
+ */
+int cmis_parse_thresholds(const uint8_t *page02, uint8_t tx_bias_multiplier,
+			  struct cmis_thresholds *thr);
+
+/**
+ * @brief Decode the lane status of Upper Page 11h (bank 0).
+ *
+ * @param page11 Buffer holding Upper Page 11h (128 bytes, byte 128 first).
+ * @param tx_bias_multiplier Factor from @ref cmis_parse_tx_bias_multiplier.
+ * @param lanes Destination array of @ref CMIS_LANES_PER_BANK entries.
+ *
+ * @retval 0 Success.
+ * @retval -EINVAL @p page11 or @p lanes is NULL, or @p tx_bias_multiplier is not
+ *                 1, 2 or 4.
+ */
+int cmis_parse_lane_status(const uint8_t *page11, uint8_t tx_bias_multiplier,
+			   struct cmis_lane_status lanes[CMIS_LANES_PER_BANK]);
+
+/**
+ * @brief Return a human-readable name for a data path state.
+ *
+ * @param state Raw data path state (@c CMIS_DP_STATE_*).
+ *
+ * @return A static, NUL-terminated string; never NULL.
+ */
+const char *cmis_dp_state_name(uint8_t state);
 
 /**
  * @brief Return a human-readable name for a module identifier.
