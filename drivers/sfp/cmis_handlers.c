@@ -24,3 +24,23 @@ static inline int z_vrfy_cmis_read_monitors(const struct device *dev, struct cmi
 	return z_impl_cmis_read_monitors(dev, mon);
 }
 #include <zephyr/syscalls/cmis_read_monitors_mrsh.c>
+
+static inline int z_vrfy_cmis_read_thresholds(const struct device *dev,
+					      struct cmis_thresholds *thr)
+{
+	K_OOPS(K_SYSCALL_DRIVER_CMIS(dev, read_thresholds));
+	K_OOPS(K_SYSCALL_MEMORY_WRITE(thr, sizeof(*thr)));
+
+	return z_impl_cmis_read_thresholds(dev, thr);
+}
+#include <zephyr/syscalls/cmis_read_thresholds_mrsh.c>
+
+static inline int z_vrfy_cmis_read_lanes(const struct device *dev,
+					 struct cmis_lane_status *lanes)
+{
+	K_OOPS(K_SYSCALL_DRIVER_CMIS(dev, read_lanes));
+	K_OOPS(K_SYSCALL_MEMORY_ARRAY_WRITE(lanes, CMIS_LANES_PER_BANK, sizeof(*lanes)));
+
+	return z_impl_cmis_read_lanes(dev, lanes);
+}
+#include <zephyr/syscalls/cmis_read_lanes_mrsh.c>

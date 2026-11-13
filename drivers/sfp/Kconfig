@@ -61,9 +61,10 @@ config SFP_CMIS
 	select CMIS
 	help
 	  Enable the I2C driver for CMIS managed pluggable modules such as
-	  QSFP-DD, OSFP, SFP-DD and DSFP. It reads Page 00h (the module-level
-	  monitors and administrative information) and decodes it through the
-	  CMIS library.
+	  QSFP-DD, OSFP, SFP-DD and DSFP. It reads the module-level monitors
+	  and administrative information (Page 00h), the monitor thresholds
+	  (Page 02h) and the status of lanes 1-8 (Page 11h), and decodes them
+	  through the CMIS library.
 
 config EMUL_CMIS
 	bool "Emulate a CMIS (QSFP-DD/OSFP) module"
@@ -71,15 +72,16 @@ config EMUL_CMIS
 	depends on EMUL
 	depends on DT_HAS_ZEPHYR_CMIS_MODULE_EMUL_ENABLED
 	help
-	  Provide an emulator that serves a canned CMIS Page 00h image over the
-	  I2C emulation bus, so the driver can be exercised without hardware.
+	  Provide an emulator that serves a canned CMIS module (Pages 00h, 01h,
+	  02h and 11h, with clear-on-read flags) over the I2C emulation bus, so
+	  the driver can be exercised without hardware.
 
 config SFP_CMIS_SHELL
 	bool "CMIS module shell"
 	depends on SFP_CMIS
 	depends on SHELL
 	help
-	  Enable a shell module providing "cmis info" and "cmis mon" commands to
-	  inspect CMIS modules.
+	  Enable a shell module providing "cmis info", "cmis mon", "cmis lanes"
+	  and "cmis thresholds" commands to inspect CMIS modules.
 
 endif # SFP

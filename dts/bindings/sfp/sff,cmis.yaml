@@ -8,8 +8,9 @@ description: |
   As with sff,sfp, the node describes the cage on the board, not the module
   in it. CMIS modules answer at the fixed I2C address 0x50 on the bus given
   by i2c-bus and use a paged memory model: a 128-byte Lower Memory that is
-  always accessible and 128-byte upper pages selected through the
-  page-select register. The driver reads Lower Memory and Page 00h.
+  always accessible and 128-byte upper pages selected through the bank- and
+  page-select registers. The driver reads Lower Memory, Page 00h, the monitor
+  thresholds in Page 02h and the lane status in Page 11h of bank 0.
 
   The GPIO properties use the QSFP-DD signal names. The driver uses
   modprsl-gpios to detect the module; the other lines are described for the

@@ -12,6 +12,10 @@
 #include <zephyr/drivers/emul.h>
 #include <zephyr/drivers/gpio/gpio_emul.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/kernel.h>
+#include <zephyr/shell/shell.h>
+#include <zephyr/shell/shell_dummy.h>
+#include <zephyr/sys/atomic.h>
 #include <zephyr/ztest.h>
 
 #include "emul_cmis.h"
@@ -131,6 +135,159 @@ ZTEST(cmis_driver, test_empty_cage)
 
 	set_module_present(true);
 	zassert_ok(cmis_read_id(cmis_dev, &id));
+}
+
+ZTEST_USER(cmis_driver, test_read_thresholds)
+{
+	struct cmis_thresholds thr;
+
+	zassert_ok(cmis_read_thresholds(cmis_dev, &thr));
+	zassert_equal(thr.temp_mdegc.high_alarm, 75000);
+	zassert_equal(thr.temp_mdegc.low_alarm, -5000, "got %d", thr.temp_mdegc.low_alarm);
+	zassert_equal(thr.vcc_uv.low_alarm, 2970000);
+	zassert_equal(thr.tx_bias_ua.high_alarm, 100000, "x2 scaling from Page 01h");
+	zassert_equal(thr.rx_power_nw.low_alarm, 63100);
+}
+
+ZTEST_USER(cmis_driver, test_read_lanes)
+{
+	struct cmis_lane_status lanes[CMIS_LANES_PER_BANK];
+
+	zassert_ok(cmis_read_lanes(cmis_dev, lanes));
+
+	for (uint8_t i = 0U; i < CMIS_LANES_PER_BANK; i++) {
+		zassert_equal(lanes[i].dp_state, CMIS_DP_STATE_ACTIVATED, "lane %u", i + 1U);
+	}
+	zassert_equal(lanes[0].tx_power_nw, 1258900U);
+	zassert_equal(lanes[0].tx_bias_ua, 56000U, "got %u", lanes[0].tx_bias_ua);
+	zassert_equal(lanes[0].rx_power_nw, 501200U);
+	zassert_equal(lanes[0].flags, 0U);
+	zassert_equal(lanes[2].rx_power_nw, 1000U);
+	zassert_equal(lanes[2].flags,
+		      CMIS_LANE_FLAG_RX_LOS | CMIS_LANE_FLAG_RX_CDR_LOL |
+			      CMIS_LANE_FLAG_RX_POWER_LOW_ALARM,
+		      "got 0x%x", lanes[2].flags);
+}
+
+ZTEST(cmis_driver, test_lane_flags_reported_once)
+{
+	struct cmis_lane_status lanes[CMIS_LANES_PER_BANK];
+
+	zassert_ok(cmis_read_lanes(cmis_dev, lanes));
+	zassert_not_equal(lanes[2].flags, 0U);
+
+	zassert_ok(cmis_read_lanes(cmis_dev, lanes));
+	zassert_equal(lanes[2].flags, 0U, "lane flags are cleared on read");
+	zassert_equal(lanes[2].rx_power_nw, 1000U, "monitor values are not latched");
+}
+
+ZTEST(cmis_driver, test_paged_reads_on_empty_cage)
+{
+	struct cmis_lane_status lanes[CMIS_LANES_PER_BANK];
+	struct cmis_thresholds thr;
+
+	set_module_present(false);
+	zassert_equal(cmis_read_thresholds(cmis_dev, &thr), -ENODEV);
+	zassert_equal(cmis_read_lanes(cmis_dev, lanes), -ENODEV);
+}
+
+ZTEST(cmis_driver, test_page_switching)
+{
+	struct cmis_lane_status lanes[CMIS_LANES_PER_BANK];
+	struct cmis_id id;
+
+	/* Page 00h content must be read correctly after Page 11h was selected. */
+	zassert_ok(cmis_read_lanes(cmis_dev, lanes));
+	zassert_ok(cmis_read_id(cmis_dev, &id));
+	zassert_equal(strcmp(id.vendor_pn, "QSFP-DD-400G"), 0, "got '%s'", id.vendor_pn);
+}
+
+#define RACE_LOOPS 25
+#define RACE_STACK 2048
+
+static K_THREAD_STACK_DEFINE(race_stack_a, RACE_STACK);
+static K_THREAD_STACK_DEFINE(race_stack_b, RACE_STACK);
+static struct k_thread race_thread_a;
+static struct k_thread race_thread_b;
+static atomic_t race_errors;
+
+static void race_read_id(void *p1, void *p2, void *p3)
+{
+	struct cmis_id id;
+
+	ARG_UNUSED(p1);
+	ARG_UNUSED(p2);
+	ARG_UNUSED(p3);
+
+	for (int i = 0; i < RACE_LOOPS; i++) {
+		if ((cmis_read_id(cmis_dev, &id) != 0) ||
+		    (strcmp(id.vendor_pn, "QSFP-DD-400G") != 0)) {
+			atomic_inc(&race_errors);
+		}
+	}
+}
+
+static void race_read_lanes(void *p1, void *p2, void *p3)
+{
+	struct cmis_lane_status lanes[CMIS_LANES_PER_BANK];
+
+	ARG_UNUSED(p1);
+	ARG_UNUSED(p2);
+	ARG_UNUSED(p3);
+
+	for (int i = 0; i < RACE_LOOPS; i++) {
+		if ((cmis_read_lanes(cmis_dev, lanes) != 0) || (lanes[0].tx_power_nw != 1258900U)) {
+			atomic_inc(&race_errors);
+		}
+	}
+}
+
+ZTEST(cmis_driver, test_concurrent_paged_reads)
+{
+	/* The emulator yields after each page select, so without serialization
+	 * in the driver the two threads read each other's page.
+	 */
+	cmis_emul_set_yield_on_select(cmis_emul, true);
+	atomic_set(&race_errors, 0);
+
+	k_thread_create(&race_thread_a, race_stack_a, RACE_STACK, race_read_id, NULL, NULL, NULL,
+			K_PRIO_PREEMPT(1), 0, K_NO_WAIT);
+	k_thread_create(&race_thread_b, race_stack_b, RACE_STACK, race_read_lanes, NULL, NULL,
+			NULL, K_PRIO_PREEMPT(1), 0, K_NO_WAIT);
+	zassert_ok(k_thread_join(&race_thread_a, K_SECONDS(5)));
+	zassert_ok(k_thread_join(&race_thread_b, K_SECONDS(5)));
+
+	cmis_emul_set_yield_on_select(cmis_emul, false);
+	zassert_equal(atomic_get(&race_errors), 0, "%d reads returned another page",
+		      (int)atomic_get(&race_errors));
+}
+
+static const char *shell_run(const char *cmd)
+{
+	const struct shell *sh = shell_backend_dummy_get_ptr();
+	size_t size;
+
+	zassert_true(WAIT_FOR(shell_ready(sh), 20000, k_msleep(1)), "dummy shell not ready");
+
+	shell_backend_dummy_clear_output(sh);
+	zassert_ok(shell_execute_cmd(sh, cmd), "'%s' failed", cmd);
+
+	return shell_backend_dummy_get_output(sh, &size);
+}
+
+ZTEST(cmis_driver, test_shell_lanes_and_thresholds)
+{
+	char cmd[48];
+	const char *out;
+
+	(void)snprintf(cmd, sizeof(cmd), "cmis lanes %s", cmis_dev->name);
+	out = shell_run(cmd);
+	zassert_not_null(strstr(out, "rx-los rx-cdr-lol rx-power-low-alarm"), "%s", out);
+	zassert_not_null(strstr(out, "1258.9"), "%s", out);
+
+	(void)snprintf(cmd, sizeof(cmd), "cmis thresholds %s", cmis_dev->name);
+	out = shell_run(cmd);
+	zassert_not_null(strstr(out, "100000"), "%s", out);
 }
 
 ZTEST_SUITE(cmis_driver, NULL, cmis_setup, cmis_before, NULL, NULL);

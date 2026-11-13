@@ -34,6 +34,8 @@ extern "C" {
 __subsystem struct cmis_driver_api {
 	int (*read_id)(const struct device *dev, struct cmis_id *id);
 	int (*read_monitors)(const struct device *dev, struct cmis_monitors *mon);
+	int (*read_thresholds)(const struct device *dev, struct cmis_thresholds *thr);
+	int (*read_lanes)(const struct device *dev, struct cmis_lane_status *lanes);
 };
 /** @endcond */
 
@@ -90,6 +92,67 @@ static inline int z_impl_cmis_read_monitors(const struct device *dev, struct cmi
 	}
 
 	return api->read_monitors(dev, mon);
+}
+
+/**
+ * @brief Read and decode the monitor thresholds (Page 02h).
+ *
+ * Selects Page 01h for the Tx bias scaling factor, then Page 02h.
+ *
+ * @param dev CMIS cage device.
+ * @param thr Destination for the decoded thresholds.
+ *
+ * @retval 0 Success.
+ * @retval -ENODEV The cage reports that no module is inserted.
+ * @retval -ENOSYS The driver does not implement this call.
+ * @retval -ENOTSUP The module has flat memory (no Page 02h) or advertises a
+ *                  reserved Tx bias scaling factor.
+ * @retval -errno Negative errno from the presence input or the bus transfer.
+ */
+__syscall int cmis_read_thresholds(const struct device *dev, struct cmis_thresholds *thr);
+
+static inline int z_impl_cmis_read_thresholds(const struct device *dev,
+					      struct cmis_thresholds *thr)
+{
+	const struct cmis_driver_api *api = (const struct cmis_driver_api *)dev->api;
+
+	if (api->read_thresholds == NULL) {
+		return -ENOSYS;
+	}
+
+	return api->read_thresholds(dev, thr);
+}
+
+/**
+ * @brief Read and decode the status of lanes 1-8 (Page 11h, bank 0).
+ *
+ * Reports the data path state, the Tx power, Tx bias and Rx power monitors and
+ * the latched lane flags of each lane. The module clears the lane flags (Page
+ * 11h bytes 134..152) when they are read, so they are reported by one call
+ * only.
+ *
+ * @param dev CMIS cage device.
+ * @param lanes Destination array of @ref CMIS_LANES_PER_BANK entries.
+ *
+ * @retval 0 Success.
+ * @retval -ENODEV The cage reports that no module is inserted.
+ * @retval -ENOSYS The driver does not implement this call.
+ * @retval -ENOTSUP The module has flat memory (no Page 11h) or advertises a
+ *                  reserved Tx bias scaling factor.
+ * @retval -errno Negative errno from the presence input or the bus transfer.
+ */
+__syscall int cmis_read_lanes(const struct device *dev, struct cmis_lane_status *lanes);
+
+static inline int z_impl_cmis_read_lanes(const struct device *dev,
+					 struct cmis_lane_status *lanes)
+{
+	const struct cmis_driver_api *api = (const struct cmis_driver_api *)dev->api;
+
+	if (api->read_lanes == NULL) {
+		return -ENOSYS;
+	}
+
+	return api->read_lanes(dev, lanes);
 }
 
 /** @} */

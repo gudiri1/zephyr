@@ -139,11 +139,124 @@ static int cmd_cmis_mon(const struct shell *sh, size_t argc, char **argv)
 	return 0;
 }
 
+/* Indexed by bit position in cmis_lane_status.flags (CMIS_LANE_FLAG_*). */
+static const char *const cmis_lane_flag_names[] = {
+	"dp-state-changed",
+	"tx-fault",
+	"tx-los",
+	"tx-cdr-lol",
+	"tx-adapt-eq-fault",
+	"tx-power-high-alarm",
+	"tx-power-low-alarm",
+	"tx-power-high-warning",
+	"tx-power-low-warning",
+	"tx-bias-high-alarm",
+	"tx-bias-low-alarm",
+	"tx-bias-high-warning",
+	"tx-bias-low-warning",
+	"rx-los",
+	"rx-cdr-lol",
+	"rx-power-high-alarm",
+	"rx-power-low-alarm",
+	"rx-power-high-warning",
+	"rx-power-low-warning",
+};
+
+/* Print a nanowatt value as microwatts with one decimal. */
+static void cmis_print_uw(const struct shell *sh, uint32_t nw)
+{
+	shell_fprintf(sh, SHELL_NORMAL, "%7u.%01u", nw / 1000U, (nw / 100U) % 10U);
+}
+
+static int cmd_cmis_lanes(const struct shell *sh, size_t argc, char **argv)
+{
+	const struct device *dev = cmis_shell_device(sh, argc, argv);
+	struct cmis_lane_status lanes[CMIS_LANES_PER_BANK];
+	int ret;
+
+	if (dev == NULL) {
+		return -ENODEV;
+	}
+
+	ret = cmis_read_lanes(dev, lanes);
+	if (ret == -ENODEV) {
+		shell_error(sh, "no module in %s", dev->name);
+		return ret;
+	} else if (ret != 0) {
+		shell_error(sh, "failed to read lane status (%d)", ret);
+		return ret;
+	}
+
+	shell_print(sh, "Lane DP state      Tx [uW]  Bias [mA]    Rx [uW]  Flags");
+	for (uint8_t i = 0U; i < CMIS_LANES_PER_BANK; i++) {
+		const struct cmis_lane_status *ln = &lanes[i];
+
+		shell_fprintf(sh, SHELL_NORMAL, "%4u %-12s", i + 1U,
+			      cmis_dp_state_name(ln->dp_state));
+		cmis_print_uw(sh, ln->tx_power_nw);
+		shell_fprintf(sh, SHELL_NORMAL, " %6u.%03u ", ln->tx_bias_ua / 1000U,
+			      ln->tx_bias_ua % 1000U);
+		cmis_print_uw(sh, ln->rx_power_nw);
+		shell_fprintf(sh, SHELL_NORMAL, " ");
+		for (size_t f = 0U; f < ARRAY_SIZE(cmis_lane_flag_names); f++) {
+			if ((ln->flags & BIT(f)) != 0U) {
+				shell_fprintf(sh, SHELL_NORMAL, " %s", cmis_lane_flag_names[f]);
+			}
+		}
+		shell_fprintf(sh, SHELL_NORMAL, "\n");
+	}
+
+	return 0;
+}
+
+static void cmis_print_threshold(const struct shell *sh, const char *name,
+				 const struct cmis_threshold *t, const char *unit)
+{
+	shell_print(sh, "%-12s %10d %10d %10d %10d  %s", name, t->high_alarm, t->high_warning,
+		    t->low_warning, t->low_alarm, unit);
+}
+
+static int cmd_cmis_thresholds(const struct shell *sh, size_t argc, char **argv)
+{
+	const struct device *dev = cmis_shell_device(sh, argc, argv);
+	struct cmis_thresholds thr;
+	int ret;
+
+	if (dev == NULL) {
+		return -ENODEV;
+	}
+
+	ret = cmis_read_thresholds(dev, &thr);
+	if (ret == -ENODEV) {
+		shell_error(sh, "no module in %s", dev->name);
+		return ret;
+	} else if (ret != 0) {
+		shell_error(sh, "failed to read thresholds (%d)", ret);
+		return ret;
+	}
+
+	shell_print(sh, "%-12s %10s %10s %10s %10s", "Monitor", "high-alarm", "high-warn",
+		    "low-warn", "low-alarm");
+	cmis_print_threshold(sh, "Temperature", &thr.temp_mdegc, "mC");
+	cmis_print_threshold(sh, "Vcc", &thr.vcc_uv, "uV");
+	cmis_print_threshold(sh, "Tx power", &thr.tx_power_nw, "nW");
+	cmis_print_threshold(sh, "Tx bias", &thr.tx_bias_ua, "uA");
+	cmis_print_threshold(sh, "Rx power", &thr.rx_power_nw, "nW");
+
+	return 0;
+}
+
 SHELL_STATIC_SUBCMD_SET_CREATE(cmis_cmds,
 	SHELL_CMD_ARG(info, &dsub_cmis_device,
 		      "Show module identification\nUsage: cmis info <device>", cmd_cmis_info, 2, 0),
 	SHELL_CMD_ARG(mon, &dsub_cmis_device,
 		      "Show module-level monitors\nUsage: cmis mon <device>", cmd_cmis_mon, 2, 0),
+	SHELL_CMD_ARG(lanes, &dsub_cmis_device,
+		      "Show lane states, monitors and latched flags\nUsage: cmis lanes <device>",
+		      cmd_cmis_lanes, 2, 0),
+	SHELL_CMD_ARG(thresholds, &dsub_cmis_device,
+		      "Show monitor thresholds\nUsage: cmis thresholds <device>",
+		      cmd_cmis_thresholds, 2, 0),
 	SHELL_SUBCMD_SET_END);
 
 SHELL_CMD_REGISTER(cmis, &cmis_cmds, "CMIS pluggable module commands", NULL);
