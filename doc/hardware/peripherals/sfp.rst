@@ -113,9 +113,19 @@ The driver only reads byte 9, whose temperature and supply flags it returns,
 so events such as ModuleStateChanged stay pending for the host's own
 interrupt handling.
 
+:c:func:`cmis_read_thresholds` returns the alarm and warning thresholds of
+Page 02h. :c:func:`cmis_read_lanes` returns, for lanes 1 to 8 (Page 11h of
+bank 0), the data path state, the Tx power, Tx bias and Rx power monitors
+and the latched lane flags such as Rx loss of signal; the module clears the
+lane flags when they are read. Page 11h is banked, so the driver writes bank
+0 to byte 126 together with the page number. Both calls apply the Tx bias
+scaling factor of Page 01h and return ``-ENOTSUP`` for modules with flat
+memory.
+
 With :kconfig:option:`CONFIG_SFP_CMIS_SHELL`, the shell provides ``cmis info
-<device>`` and ``cmis mon <device>``. The ``zephyr,cmis-module-emul``
-emulator serves a module image with paging and clear-on-read flags.
+<device>``, ``cmis mon <device>``, ``cmis lanes <device>`` and ``cmis
+thresholds <device>``. The ``zephyr,cmis-module-emul`` emulator serves a
+module image with paging, banked Page 11h and clear-on-read flags.
 
 Testing
 *******
